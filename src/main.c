@@ -11,10 +11,11 @@
 
 #include <device.h>
 #include <drivers/pwm.h>
+#include <math.h>
 
 static const struct pwm_dt_spec pwm_led0 = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
 
-#define NUM_STEPS 200U
+#define NUM_STEPS 400U
 #define SLEEP_MSEC 25U
 
 enum states
@@ -127,36 +128,36 @@ static void setupUART()
 
 	ring_buf_init(&ringbuf, sizeof(ring_buffer), ring_buffer);
 
-	LOG_INF("Wait for DTR");
+	// LOG_INF("Wait for DTR");
 
-	while (true)
-	{
-		uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
-		if (dtr)
-		{
-			break;
-		}
-		else
-		{
-			/* Give CPU resources to low priority threads. */
-			k_sleep(K_MSEC(100));
-		}
-	}
+	// while (true)
+	// {
+	// 	uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
+	// 	if (dtr)
+	// 	{
+	// 		break;
+	// 	}
+	// 	else
+	// 	{
+	// 		/* Give CPU resources to low priority threads. */
+	// 		k_sleep(K_MSEC(100));
+	// 	}
+	// }
 
-	LOG_INF("DTR set");
+	// LOG_INF("DTR set");
 
-	/* They are optional, we use them to test the interrupt endpoint */
-	ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DCD, 1);
-	if (ret)
-	{
-		LOG_WRN("Failed to set DCD, ret code %d", ret);
-	}
+	// /* They are optional, we use them to test the interrupt endpoint */
+	// ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DCD, 1);
+	// if (ret)
+	// {
+	// 	LOG_WRN("Failed to set DCD, ret code %d", ret);
+	// }
 
-	ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DSR, 1);
-	if (ret)
-	{
-		LOG_WRN("Failed to set DSR, ret code %d", ret);
-	}
+	// ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DSR, 1);
+	// if (ret)
+	// {
+	// 	LOG_WRN("Failed to set DSR, ret code %d", ret);
+	// }
 
 	/* Wait 1 sec for the host to do all settings */
 	k_busy_wait(1000000);
@@ -177,6 +178,8 @@ static void setupUART()
 	uart_irq_rx_enable(dev);
 }
 
+double time_sec = 0;
+
 void main(void)
 {
 	setupUART();
@@ -196,12 +199,13 @@ void main(void)
 	}
 
 	int period = pwm_led0.period / 8U;
-
+	int max_pulse_width = period - period/5;
+	int min_pulse_width = step;
+double scale;
 	while (1)
 	{
 
 		ret = pwm_set_dt(&pwm_led0, period, pulse_width);
-		// ret = pwm_set_pulse_dt(&pwm_led0, pulse_width);
 		if (ret)
 		{
 			printk("Error %d: failed to set pulse width\n", ret);
@@ -211,29 +215,8 @@ void main(void)
 		switch (program_state)
 		{
 		case fade:
-
-			if (dir)
-			{
-				pulse_width += step;
-				if (pulse_width >= period)
-				{
-					pulse_width = period - step;
-					dir = 0U;
-				}
-			}
-			else
-			{
-				if (pulse_width >= step)
-				{
-					pulse_width -= step;
-				}
-				else
-				{
-					pulse_width = step;
-					dir = 1U;
-				}
-			}
-
+			scale = (cos(2.0*time_sec)+1.0)/2.0;
+			pulse_width =  (uint32_t)((max_pulse_width-min_pulse_width)*scale)+min_pulse_width;
 			break;
 
 		case enable:
@@ -249,5 +232,6 @@ void main(void)
 		}
 
 		k_sleep(K_MSEC(SLEEP_MSEC));
+		time_sec+= (double)SLEEP_MSEC/(double)MSEC_PER_SEC;
 	}
 }
