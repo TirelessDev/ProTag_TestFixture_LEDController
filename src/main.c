@@ -27,7 +27,7 @@ enum states
 	low_fade
 };
 
-int program_state = low_fade;
+int program_state = off;
 
 LOG_MODULE_REGISTER(cdc_acm_echo, LOG_LEVEL_INF);
 
@@ -56,27 +56,27 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 				recv_len = 0;
 			};
 
-			if (strchr(buffer, high_fade+'0') != NULL)
+			if (strchr(buffer, high_fade + '0') != NULL)
 			{ // see if we have received a fade command '0'
 				rb_len = ring_buf_put(&ringbuf, "high fade\n", 11);
 				program_state = high_fade;
 			}
-			else if (strchr(buffer, on+'0') != NULL)
+			else if (strchr(buffer, on + '0') != NULL)
 			{ // see if we have received an enable command '1'
 				rb_len = ring_buf_put(&ringbuf, "on\n", 4);
 				program_state = on;
 			}
-			else if (strchr(buffer, off+'0') != NULL)
+			else if (strchr(buffer, off + '0') != NULL)
 			{ // see if we have received a disable command '2'
 				rb_len = ring_buf_put(&ringbuf, "off\n", 5);
 				program_state = off;
 			}
-			else if (strchr(buffer, low+'0') != NULL)
+			else if (strchr(buffer, low + '0') != NULL)
 			{ // see if we have received a disable command '3'
 				rb_len = ring_buf_put(&ringbuf, "low\n", 5);
 				program_state = low;
 			}
-			else if (strchr(buffer, low_fade+'0') != NULL)
+			else if (strchr(buffer, low_fade + '0') != NULL)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "low fade\n", 10);
 				program_state = low_fade;
@@ -157,39 +157,32 @@ double time_sec = 0;
 
 void main(void)
 {
-	setupUART();
-
-	uint32_t pulse_width = 0U;
-	uint32_t step = pwm_led0.period / NUM_STEPS;
-	
-	int ret;
-
 	if (!device_is_ready(pwm_led0.dev))
 	{
 		printk("Error: PWM device %s is not ready\n",
 			   pwm_led0.dev->name);
 		return;
 	}
-
 	int period = pwm_led0.period / 8U;
-	int max_pulse_width = period - (period/12);
+	int ret = pwm_set_dt(&pwm_led0, period, period);
+	
+	
+	int max_pulse_width = period - (period / 12);
 	int min_pulse_width = 0;
-	double scale;
+	
+
+	double scale = 0;
+	uint32_t pulse_width = 0;
+
+	setupUART();
+
 	while (1)
 	{
-
-		ret = pwm_set_dt(&pwm_led0, period, pulse_width);
-		if (ret)
-		{
-			printk("Error %d: failed to set pulse width\n", ret);
-			return;
-		}
-
 		switch (program_state)
 		{
 		case high_fade:
-			scale = (cos(8.0*time_sec)+1.0)/2.0;
-			pulse_width =  (uint32_t)((max_pulse_width-min_pulse_width)*scale)+min_pulse_width;
+			scale = (cos(8.0 * time_sec) + 1.0) / 2.0;
+			pulse_width = (uint32_t)((max_pulse_width - min_pulse_width) * scale) + min_pulse_width;
 			break;
 
 		case on:
@@ -205,15 +198,22 @@ void main(void)
 			break;
 
 		case low_fade:
-			scale = (cos(4.0*time_sec)+1.0)/2.0;
-			pulse_width =  (uint32_t)((period-max_pulse_width)*scale)+max_pulse_width;
+			scale = (cos(4.0 * time_sec) + 1.0) / 2.0;
+			pulse_width = (uint32_t)((period - max_pulse_width) * scale) + max_pulse_width;
 			break;
 
 		default:
 			break;
 		}
 
+		ret = pwm_set_dt(&pwm_led0, period, pulse_width);
+		if (ret)
+		{
+			printk("Error %d: failed to set pulse width\n", ret);
+			return;
+		}
+
 		k_sleep(K_MSEC(SLEEP_MSEC));
-		time_sec+= (double)SLEEP_MSEC/(double)MSEC_PER_SEC;
+		time_sec += (double)SLEEP_MSEC / (double)MSEC_PER_SEC;
 	}
 }
