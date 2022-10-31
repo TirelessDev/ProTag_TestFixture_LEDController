@@ -20,12 +20,14 @@ static const struct pwm_dt_spec pwm_led0 = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
 
 enum states
 {
-	fade,
-	enable,
-	disable
+	high_fade,
+	on,
+	off,
+	low,
+	low_fade
 };
 
-int program_state = fade;
+int program_state = low_fade;
 
 LOG_MODULE_REGISTER(cdc_acm_echo, LOG_LEVEL_INF);
 
@@ -54,28 +56,32 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 				recv_len = 0;
 			};
 
-			if (strchr(buffer, '0') != NULL)
+			if (strchr(buffer, high_fade+'0') != NULL)
 			{ // see if we have received a fade command '0'
-				rb_len = ring_buf_put(&ringbuf, "fading\n", 8);
-				program_state = fade;
+				rb_len = ring_buf_put(&ringbuf, "high fade\n", 11);
+				program_state = high_fade;
 			}
-			else if (strchr(buffer, '1') != NULL)
+			else if (strchr(buffer, on+'0') != NULL)
 			{ // see if we have received an enable command '1'
-				rb_len = ring_buf_put(&ringbuf, "enable\n", 8);
-				program_state = enable;
+				rb_len = ring_buf_put(&ringbuf, "on\n", 4);
+				program_state = on;
 			}
-			else if (strchr(buffer, '2') != NULL)
+			else if (strchr(buffer, off+'0') != NULL)
 			{ // see if we have received a disable command '2'
-				rb_len = ring_buf_put(&ringbuf, "disable\n", 9);
-				program_state = disable;
+				rb_len = ring_buf_put(&ringbuf, "off\n", 5);
+				program_state = off;
+			}
+			else if (strchr(buffer, low+'0') != NULL)
+			{ // see if we have received a disable command '3'
+				rb_len = ring_buf_put(&ringbuf, "low\n", 5);
+				program_state = low;
+			}
+			else if (strchr(buffer, low_fade+'0') != NULL)
+			{ // see if we have received a disable command '4'
+				rb_len = ring_buf_put(&ringbuf, "low fade\n", 10);
+				program_state = low_fade;
 			}
 
-			// rb_len = ring_buf_put(&ringbuf, buffer, recv_len);
-			// if (rb_len < recv_len) {
-			// 	LOG_ERR("Drop %u bytes", recv_len - rb_len);
-			// }
-
-			LOG_DBG("tty fifo -> ringbuf %d bytes", rb_len);
 			if (rb_len)
 			{
 				uart_irq_tx_enable(dev);
@@ -128,37 +134,6 @@ static void setupUART()
 
 	ring_buf_init(&ringbuf, sizeof(ring_buffer), ring_buffer);
 
-	// LOG_INF("Wait for DTR");
-
-	// while (true)
-	// {
-	// 	uart_line_ctrl_get(dev, UART_LINE_CTRL_DTR, &dtr);
-	// 	if (dtr)
-	// 	{
-	// 		break;
-	// 	}
-	// 	else
-	// 	{
-	// 		/* Give CPU resources to low priority threads. */
-	// 		k_sleep(K_MSEC(100));
-	// 	}
-	// }
-
-	// LOG_INF("DTR set");
-
-	// /* They are optional, we use them to test the interrupt endpoint */
-	// ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DCD, 1);
-	// if (ret)
-	// {
-	// 	LOG_WRN("Failed to set DCD, ret code %d", ret);
-	// }
-
-	// ret = uart_line_ctrl_set(dev, UART_LINE_CTRL_DSR, 1);
-	// if (ret)
-	// {
-	// 	LOG_WRN("Failed to set DSR, ret code %d", ret);
-	// }
-
 	/* Wait 1 sec for the host to do all settings */
 	k_busy_wait(1000000);
 
@@ -186,10 +161,8 @@ void main(void)
 
 	uint32_t pulse_width = 0U;
 	uint32_t step = pwm_led0.period / NUM_STEPS;
-	uint8_t dir = 1U;
+	
 	int ret;
-
-	printk("PWM-based LED fade\n");
 
 	if (!device_is_ready(pwm_led0.dev))
 	{
@@ -199,9 +172,9 @@ void main(void)
 	}
 
 	int period = pwm_led0.period / 8U;
-	int max_pulse_width = period - period/5;
-	int min_pulse_width = step;
-double scale;
+	int max_pulse_width = period - (period/12);
+	int min_pulse_width = 0;
+	double scale;
 	while (1)
 	{
 
@@ -214,17 +187,26 @@ double scale;
 
 		switch (program_state)
 		{
-		case fade:
-			scale = (cos(2.0*time_sec)+1.0)/2.0;
+		case high_fade:
+			scale = (cos(8.0*time_sec)+1.0)/2.0;
 			pulse_width =  (uint32_t)((max_pulse_width-min_pulse_width)*scale)+min_pulse_width;
 			break;
 
-		case enable:
+		case on:
 			pulse_width = 0U;
 			break;
 
-		case disable:
+		case off:
 			pulse_width = period;
+			break;
+
+		case low:
+			pulse_width = max_pulse_width;
+			break;
+
+		case low_fade:
+			scale = (cos(4.0*time_sec)+1.0)/2.0;
+			pulse_width =  (uint32_t)((period-max_pulse_width)*scale)+max_pulse_width;
 			break;
 
 		default:
