@@ -86,10 +86,12 @@ enum states
 	on,
 	off,
 	low,
-	low_fade
+	low_fade,
+	nfc_off,
+	nfc_on
 };
 
-int program_state = high_fade;
+int program_state = off;
 
 void processTxBuffer(const struct device *dev){
 	if (uart_irq_tx_ready(dev))
@@ -163,7 +165,26 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "low fade\n", 10);
 				program_state = low_fade;
+			}else if (strchr(buffer, nfc_off + '0') != NULL)
+			{ // see if we have received a disable command '4'
+				rb_len = ring_buf_put(&ringbuf, "nfc_off\n", 9);
+				int err = st25r3911b_nfca_field_off();
+				if (err)
+				{
+					LOG_INF("Field on error %d.", err);
+				}
+
+			}else if (strchr(buffer, nfc_on + '0') != NULL)
+			{ // see if we have received a disable command '4'
+				rb_len = ring_buf_put(&ringbuf, "nfc_on\n", 8);
+				int err = st25r3911b_nfca_field_on();
+				if (err)
+				{
+					LOG_INF("Field on error %d.", err);
+				}
 			}
+
+		
 
 			if (rb_len)
 			{
@@ -1020,12 +1041,7 @@ void main(void)
 		return;
 	}
 
-	err = st25r3911b_nfca_field_on();
-	if (err)
-	{
-		LOG_INF("Field on error %d.", err);
-		return;
-	}
+	
 
 	if (!device_is_ready(pwm_led0.dev))
 	{
@@ -1038,7 +1054,7 @@ void main(void)
 
 	while (true)
 	{
-		k_poll(events, ARRAY_SIZE(events), K_MSEC(SLEEP_MSEC));
+		k_poll(events, ARRAY_SIZE(events), K_FOREVER);
 		err = st25r3911b_nfca_process();
 		if (err)
 		{
