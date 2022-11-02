@@ -12,11 +12,16 @@
 #include <device.h>
 #include <drivers/pwm.h>
 #include <math.h>
+#include "nfc.c"
 
 static const struct pwm_dt_spec pwm_led0 = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
 
 #define NUM_STEPS 400U
 #define SLEEP_MSEC 25U
+
+#define STACKSIZE 1024
+/* scheduling priority used by each thread */
+#define PRIORITY 7
 
 enum states
 {
@@ -27,7 +32,7 @@ enum states
 	low_fade
 };
 
-int program_state = off;
+int program_state = high_fade;
 
 LOG_MODULE_REGISTER(cdc_acm_echo, LOG_LEVEL_INF);
 
@@ -153,28 +158,19 @@ static void setupUART()
 	uart_irq_rx_enable(dev);
 }
 
+
 double time_sec = 0;
 
-void main(void)
+void led_loop(void)
 {
-	if (!device_is_ready(pwm_led0.dev))
-	{
-		printk("Error: PWM device %s is not ready\n",
-			   pwm_led0.dev->name);
-		return;
-	}
 	int period = pwm_led0.period / 8U;
 	int ret = pwm_set_dt(&pwm_led0, period, period);
-	
-	
+
 	int max_pulse_width = period - (period / 12);
 	int min_pulse_width = 0;
-	
 
 	double scale = 0;
 	uint32_t pulse_width = 0;
-
-	setupUART();
 
 	while (1)
 	{
@@ -209,7 +205,7 @@ void main(void)
 		ret = pwm_set_dt(&pwm_led0, period, pulse_width);
 		if (ret)
 		{
-			printk("Error %d: failed to set pulse width\n", ret);
+			LOG_INF("Error %d: failed to set pulse width\n", ret);
 			return;
 		}
 
@@ -217,3 +213,59 @@ void main(void)
 		time_sec += (double)SLEEP_MSEC / (double)MSEC_PER_SEC;
 	}
 }
+
+void main(void)
+{
+	int err;
+
+	nfc_t4t_hl_procedure_cb_register(&t4t_hl_procedure_cb);
+
+	k_work_init_delayable(&transmit_work, transfer_handler);
+
+	err = nfc_t4t_isodep_init(tx_data, sizeof(tx_data),
+							  t4t.data, sizeof(t4t.data),
+							  &t4t_isodep_cb);
+	if (err)
+	{
+		LOG_INF("NFC T4T ISO-DEP Protocol initialization failed err: %d.\n",
+				err);
+		return;
+	}
+
+	err = st25r3911b_nfca_init(events, ARRAY_SIZE(events), &cb);
+	if (err)
+	{
+		LOG_INF("NFCA initialization failed err: %d.\n", err);
+		return;
+	}
+
+	err = st25r3911b_nfca_field_on();
+	if (err)
+	{
+		LOG_INF("Field on error %d.", err);
+		return;
+	}
+
+	if (!device_is_ready(pwm_led0.dev))
+	{
+		LOG_INF("Error: PWM device %s is not ready\n",
+				pwm_led0.dev->name);
+		return;
+	}
+
+	setupUART();
+
+	while (true)
+	{
+		k_poll(events, ARRAY_SIZE(events), K_MSEC(SLEEP_MSEC));
+		err = st25r3911b_nfca_process();
+		if (err)
+		{
+			LOG_INF("NFC-A process failed, err: %d.\n", err);
+			return;
+		}
+	}
+}
+
+K_THREAD_DEFINE(led_loop_id, STACKSIZE, led_loop, NULL, NULL, NULL,
+				PRIORITY, 0, 0);
