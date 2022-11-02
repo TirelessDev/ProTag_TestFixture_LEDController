@@ -60,6 +60,7 @@ static uint8_t rx_data[NFC_RX_DATA_LEN];
 
 static struct k_poll_event events[ST25R3911B_NFCA_EVENT_CNT];
 static struct k_work_delayable transmit_work;
+static struct k_work_delayable shutdown_field_work;
 
 NFC_T4T_CC_DESC_DEF(t4t_cc, MAX_TLV_BLOCKS);
 
@@ -171,20 +172,19 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 				int err = st25r3911b_nfca_field_off();
 				if (err)
 				{
-					LOG_INF("Field on error %d.", err);
+					LOG_INF("Field off error %d.", err);
 				}
 
 			}else if (strchr(buffer, nfc_on + '0') != NULL)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "nfc_on\n", 8);
 				int err = st25r3911b_nfca_field_on();
+				k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
 				if (err)
 				{
 					LOG_INF("Field on error %d.", err);
 				}
 			}
-
-		
 
 			if (rb_len)
 			{
@@ -585,8 +585,10 @@ static void t2t_data_read_complete(uint8_t *data)
 	}
 
 	st25r3911b_nfca_tag_sleep();
-
-	k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
+	// k_sleep(K_MSEC(1000));
+	// st25r3911b_nfca_field_off();
+	k_work_reschedule(&shutdown_field_work,K_MSEC(TRANSMIT_DELAY));
+	// k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
 }
 
 static int t2t_on_data_read(const uint8_t *data, size_t data_len,
@@ -659,6 +661,7 @@ static int on_t2t_transfer_complete(const uint8_t *data, size_t len)
 	}
 }
 
+
 static void transfer_handler(struct k_work *work)
 {
 	nfc_tag_detect(false);
@@ -698,6 +701,13 @@ static void nfc_field_off(void)
 {
 	printk("NFC field off.\n");
 }
+
+static void nfc_field_off_handler(struct k_work *work){
+
+	printk("NFC field off.\n");
+	st25r3911b_nfca_field_off();
+}
+
 
 static void tag_detected(const struct st25r3911b_nfca_sens_resp *sens_resp)
 {
@@ -1020,19 +1030,21 @@ void main(void)
 {
 	int err;
 
-	nfc_t4t_hl_procedure_cb_register(&t4t_hl_procedure_cb);
+	// nfc_t4t_hl_procedure_cb_register(&t4t_hl_procedure_cb);
 
 	k_work_init_delayable(&transmit_work, transfer_handler);
 
-	err = nfc_t4t_isodep_init(tx_data, sizeof(tx_data),
-							  t4t.data, sizeof(t4t.data),
-							  &t4t_isodep_cb);
-	if (err)
-	{
-		LOG_INF("NFC T4T ISO-DEP Protocol initialization failed err: %d.\n",
-				err);
-		return;
-	}
+	k_work_init_delayable(&shutdown_field_work, nfc_field_off_handler);
+
+	// err = nfc_t4t_isodep_init(tx_data, sizeof(tx_data),
+	// 						  t4t.data, sizeof(t4t.data),
+	// 						  &t4t_isodep_cb);
+	// if (err)
+	// {
+	// 	LOG_INF("NFC T4T ISO-DEP Protocol initialization failed err: %d.\n",
+	// 			err);
+	// 	return;
+	// }
 
 	err = st25r3911b_nfca_init(events, ARRAY_SIZE(events), &cb);
 	if (err)

@@ -27,3 +27,5 @@ The the nRF52833DK should be connected to the NFC reader as follows:
 - `VDD`   - I/O Vref
 
 The text records of any type 2 NFC tags read will be reported with a `'nfc: '` prefix.
+
+Once a tag has been read the field will automatically turn off. A subsequent call to `'6'` will be required to read again.
