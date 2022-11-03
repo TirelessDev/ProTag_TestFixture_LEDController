@@ -61,6 +61,7 @@ static uint8_t rx_data[NFC_RX_DATA_LEN];
 static struct k_poll_event events[ST25R3911B_NFCA_EVENT_CNT];
 static struct k_work_delayable transmit_work;
 static struct k_work_delayable shutdown_field_work;
+static struct k_work_delayable turn_on_work;
 
 NFC_T4T_CC_DESC_DEF(t4t_cc, MAX_TLV_BLOCKS);
 
@@ -82,6 +83,9 @@ static const struct pwm_dt_spec pwm_led0 = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
 #define PRIORITY 7
 
 int initNFC(void);
+void handle_error(void);
+
+bool requesting_nfc_read;
 
 enum states
 {
@@ -171,23 +175,14 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 			}else if (strchr(buffer, nfc_off + '0') != NULL)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "nfc_off\n", 9);
-				int err = st25r3911b_nfca_field_off();
-				if (err)
-				{
-					LOG_INF("Field off error %d.", err);
-					initNFC();
-				}
+				requesting_nfc_read = false;
+				k_work_reschedule(&shutdown_field_work,K_MSEC(100));
 
 			}else if (strchr(buffer, nfc_on + '0') != NULL)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "nfc_on\n", 8);
-				int err = st25r3911b_nfca_field_on();
-				if (err)
-				{
-					LOG_INF("Field on error %d.", err);
-					initNFC();
-					k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
-				}
+				requesting_nfc_read = true;
+				k_work_reschedule(&turn_on_work, K_MSEC(100));
 			}
 
 			if (rb_len)
@@ -541,6 +536,7 @@ static void ndef_data_analyze(const uint8_t *ndef_msg_buff, size_t nfc_data_len)
 				writeToUart("\n",1);
 				uart_irq_tx_enable(dev);
 				processTxBuffer(dev);
+				requesting_nfc_read = false;
 			}
 			else
 			{
@@ -562,6 +558,7 @@ static void t2t_data_read_complete(uint8_t *data)
 	if (!data)
 	{
 		printk("No T2T data read.\n");
+		handle_error();
 		return;
 	}
 
@@ -588,11 +585,8 @@ static void t2t_data_read_complete(uint8_t *data)
 		}
 	}
 
-	// st25r3911b_nfca_tag_sleep();
-	// k_sleep(K_MSEC(1000));
-	// st25r3911b_nfca_field_off();
+	// shut down the field
 	k_work_reschedule(&shutdown_field_work,K_MSEC(TRANSMIT_DELAY));
-	// k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
 }
 
 static int t2t_on_data_read(const uint8_t *data, size_t data_len,
@@ -709,6 +703,11 @@ static void nfc_field_off(void)
 static void nfc_field_off_handler(struct k_work *work){
 	st25r3911b_nfca_field_off();
 }
+static void nfc_field_on_handler(struct k_work *work){
+	if (requesting_nfc_read) {
+		st25r3911b_nfca_field_on();
+	}
+}
 
 
 static void tag_detected(const struct st25r3911b_nfca_sens_resp *sens_resp)
@@ -748,6 +747,8 @@ static void anticollision_completed(const struct st25r3911b_nfca_tag_info *tag_i
 		if (err)
 		{
 			printk("Type 2 Tag data read error %d.\n", err);
+
+			handle_error();
 		}
 	}
 	else if (tag_info->type == ST25R3911B_NFCA_TAG_TYPE_T4T)
@@ -780,6 +781,7 @@ static void transfer_completed(const uint8_t *data, size_t len, int err)
 	if (err)
 	{
 		printk("NFC Transfer error: %d.\n", err);
+		handle_error();
 		return;
 	}
 
@@ -790,6 +792,7 @@ static void transfer_completed(const uint8_t *data, size_t len, int err)
 		if (err)
 		{
 			printk("NFC-A T2T read error: %d.\n", err);
+			handle_error();
 		}
 		// LOG_HEXDUMP_INF(data, len, "data read");
 
@@ -1049,11 +1052,22 @@ int initNFC(void){
 	return 1;
 }
 
+void handle_error(void){
+	writeToUart("nfc error\n",11);
+	uart_irq_tx_enable(dev);
+
+	processTxBuffer(dev);
+	k_work_reschedule(&shutdown_field_work, K_MSEC(100)); // reschedule turn off
+	k_work_reschedule(&turn_on_work, K_MSEC(500)); // reschedule turn on
+}
+
 void main(void)
 {
 	int err;
 
 	k_work_init_delayable(&transmit_work, transfer_handler);
+
+	k_work_init_delayable(&turn_on_work, nfc_field_on_handler);
 
 	k_work_init_delayable(&shutdown_field_work, nfc_field_off_handler);
 
@@ -1077,7 +1091,10 @@ void main(void)
 		if (err)
 		{
 			LOG_INF("NFC-A process failed, err: %d.\n", err);
+			
 			k_busy_wait(1000000); 
+				handle_error();
+			
 		}
 	}
 }
