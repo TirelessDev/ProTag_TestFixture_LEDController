@@ -81,6 +81,8 @@ static const struct pwm_dt_spec pwm_led0 = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
 /* scheduling priority used by each thread */
 #define PRIORITY 7
 
+int initNFC(void);
+
 enum states
 {
 	high_fade,
@@ -173,16 +175,18 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 				if (err)
 				{
 					LOG_INF("Field off error %d.", err);
+					initNFC();
 				}
 
 			}else if (strchr(buffer, nfc_on + '0') != NULL)
 			{ // see if we have received a disable command '4'
 				rb_len = ring_buf_put(&ringbuf, "nfc_on\n", 8);
 				int err = st25r3911b_nfca_field_on();
-				k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
 				if (err)
 				{
 					LOG_INF("Field on error %d.", err);
+					initNFC();
+					k_work_reschedule(&transmit_work, K_MSEC(TRANSMIT_DELAY));
 				}
 			}
 
@@ -397,11 +401,11 @@ static int t2t_header_read(void)
 
 	tx_buf.data = tx_data;
 	tx_buf.len = NFC_T2T_READ_CMD_LEN;
-
+	
 	ftd = ftd_calculate(tx_data, NFC_T2T_READ_CMD_LEN);
 
 	t2t.state = T2T_HEADER_READ;
-
+	
 	err = st25r3911b_nfca_transfer_with_crc(&tx_buf, &rx_buf, ftd);
 
 	return err;
@@ -584,7 +588,7 @@ static void t2t_data_read_complete(uint8_t *data)
 		}
 	}
 
-	st25r3911b_nfca_tag_sleep();
+	// st25r3911b_nfca_tag_sleep();
 	// k_sleep(K_MSEC(1000));
 	// st25r3911b_nfca_field_off();
 	k_work_reschedule(&shutdown_field_work,K_MSEC(TRANSMIT_DELAY));
@@ -703,8 +707,6 @@ static void nfc_field_off(void)
 }
 
 static void nfc_field_off_handler(struct k_work *work){
-
-	printk("NFC field off.\n");
 	st25r3911b_nfca_field_off();
 }
 
@@ -731,7 +733,6 @@ static void anticollision_completed(const struct st25r3911b_nfca_tag_info *tag_i
 		printk("Error during anticollision avoidance.\n");
 
 		nfc_tag_detect(false);
-
 		return;
 	}
 
@@ -1026,34 +1027,39 @@ static const struct nfc_t4t_hl_procedure_cb t4t_hl_procedure_cb = {
 
 
 
-void main(void)
-{
-	int err;
+int initNFC(void){
+	nfc_t4t_hl_procedure_cb_register(&t4t_hl_procedure_cb);
 
-	// nfc_t4t_hl_procedure_cb_register(&t4t_hl_procedure_cb);
-
-	k_work_init_delayable(&transmit_work, transfer_handler);
-
-	k_work_init_delayable(&shutdown_field_work, nfc_field_off_handler);
-
-	// err = nfc_t4t_isodep_init(tx_data, sizeof(tx_data),
-	// 						  t4t.data, sizeof(t4t.data),
-	// 						  &t4t_isodep_cb);
-	// if (err)
-	// {
-	// 	LOG_INF("NFC T4T ISO-DEP Protocol initialization failed err: %d.\n",
-	// 			err);
-	// 	return;
-	// }
+	int err = nfc_t4t_isodep_init(tx_data, sizeof(tx_data),
+							  t4t.data, sizeof(t4t.data),
+							  &t4t_isodep_cb);
+	if (err)
+	{
+		LOG_INF("NFC T4T ISO-DEP Protocol initialization failed err: %d.\n",
+				err);
+		return err;
+	}
 
 	err = st25r3911b_nfca_init(events, ARRAY_SIZE(events), &cb);
 	if (err)
 	{
 		LOG_INF("NFCA initialization failed err: %d.\n", err);
-		return;
+		return err;
 	}
+	return 1;
+}
 
-	
+void main(void)
+{
+	int err;
+
+	k_work_init_delayable(&transmit_work, transfer_handler);
+
+	k_work_init_delayable(&shutdown_field_work, nfc_field_off_handler);
+
+	while (initNFC() != 1){
+		k_busy_wait(1000000); //wait for 1sec and try again
+	}
 
 	if (!device_is_ready(pwm_led0.dev))
 	{
@@ -1071,7 +1077,7 @@ void main(void)
 		if (err)
 		{
 			LOG_INF("NFC-A process failed, err: %d.\n", err);
-			return;
+			k_busy_wait(1000000); 
 		}
 	}
 }
